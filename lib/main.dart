@@ -52,6 +52,7 @@ class _EditorHomeState extends State<EditorHome> {
   final List<Map<String, double>> highlights = [];
   String status = 'Import a video to begin';
   String ratio = '9:16';
+  String editStyle = 'funny';
   final serverController = TextEditingController(text: 'https://batates-ai-editor.onrender.com');
   final streamController = TextEditingController();
   final chatStreamController = TextEditingController();
@@ -299,6 +300,18 @@ class _EditorHomeState extends State<EditorHome> {
         _chip('Export'),
       ]),
       const SizedBox(height: 12),
+      const Text('SMART EDIT STYLE', style: TextStyle(color: muted, fontSize: 10, fontWeight: FontWeight.bold)),
+      DropdownButtonFormField<String>(
+        value: editStyle,
+        decoration: const InputDecoration(labelText: 'أسلوب المونتاج التلقائي'),
+        items: const [
+          DropdownMenuItem(value: 'funny', child: Text('Funny • ألوان حيوية')),
+          DropdownMenuItem(value: 'gaming', child: Text('Gaming • تباين وحدّة')),
+          DropdownMenuItem(value: 'professional', child: Text('Professional • ألوان متوازنة')),
+        ],
+        onChanged: busy ? null : (v) => setState(() => editStyle = v ?? 'funny'),
+      ),
+      const SizedBox(height: 12),
       SizedBox(width: double.infinity, child: FilledButton.icon(
         style: FilledButton.styleFrom(backgroundColor: purple, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 18)),
         onPressed: busy || scanning ? null : (clips.isEmpty ? importVideos : () => sendToBackend()),
@@ -470,6 +483,7 @@ class _EditorHomeState extends State<EditorHome> {
       } else {
         final request = http.MultipartRequest('POST', Uri.parse('$base/jobs/upload'))
           ..fields['ratio'] = ratio
+          ..fields['style'] = editStyle
           ..files.add(await http.MultipartFile.fromPath('video', clips[active].path));
         if (chatFile != null) {
           request.files.add(await http.MultipartFile.fromPath('chat', chatFile!.path));
