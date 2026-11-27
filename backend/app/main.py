@@ -80,11 +80,14 @@ def chat_peaks(chat_path: Optional[Path], duration: float, window=5.0):
         rows=json.loads(chat_path.read_text(encoding="utf-8"))
     except Exception: return []
     counts={}
+    reactions=("lol","lmao","😂","🤣","💀","wow","wtf","no way","pog","!!!","هههه","😭","يا ساتر","مستحيل")
     for row in rows if isinstance(rows,list) else []:
         try:
             sec=max(0.0,min(duration,float(row.get("timestamp",0))))
             bucket=int(sec//window)*window
-            counts[bucket]=counts.get(bucket,0)+1
+            message=str(row.get("text","")).lower()
+            weight=1.0 + (1.5 if any(token in message for token in reactions) else 0.0)
+            counts[bucket]=counts.get(bucket,0.0)+weight
         except Exception: pass
     if not counts: return []
     maximum=max(counts.values()) or 1
