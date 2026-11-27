@@ -164,13 +164,13 @@ def worker(job_id, source, chat_path, ratio):
 
 def new_job(source: Path, chat_path: Optional[Path], ratio: str):
     job_id=uuid.uuid4().hex[:12]
-    with LOCK: JOBS[job_id]={"id":job_id,"status":"queued","created":__import__("time").time()}
+    with LOCK: JOBS[job_id]={"id":job_id,"status":"queued","created":__import__("time").time(),"source_path":str(source)}
     threading.Thread(target=worker,args=(job_id,source,chat_path,ratio),daemon=True).start()
     return {"job_id":job_id,"status":"queued","poll":f"/jobs/{job_id}"}
 
 @app.get("/health")
 def health():
-    return {"ok":True,"service":"BATATES","features":{"upload":True,"direct_media_url":True,"semantic_vision_configurable":True,"twitch_chat":True,"youtube_chat":bool(os.getenv("BATATES_YOUTUBE_API_KEY")),"optional_whisper":bool(os.getenv("BATATES_WHISPER_MODEL")),"chunked_live_capture":True}}
+    return {"ok":True,"service":"BATATES","features":{"upload":True,"direct_media_url":True,"public_watch_page_resolution":True,"obs_rtmp_ingest":True,"editable_clip_export":True,"semantic_vision_configurable":True,"twitch_chat":True,"youtube_chat":bool(os.getenv("BATATES_YOUTUBE_API_KEY")),"optional_whisper":bool(os.getenv("BATATES_WHISPER_MODEL")),"chunked_live_capture":True}}
 
 @app.post("/jobs/upload")
 async def upload_video(video: UploadFile=File(...), chat: Optional[UploadFile]=File(None), ratio: str=Form("9:16")):
@@ -217,7 +217,9 @@ async def stream_url(url: str=Form(...), ratio: str=Form("9:16"),
                     JOBS[job_id]["current_chunk"]=index+1
                 source=jobdir/f"live_{index:04d}.mp4"
                 try:
-                    run(["ffmpeg","-y","-i",url,"-t",str(chunk_seconds),"-c","copy","-movflags","+faststart",str(source)],timeout=chunk_seconds+45)
+                    from .stream_sources import resolve_media_url
+                    media_url=resolve_media_url(url)
+                    run(["ffmpeg","-y","-i",media_url,"-t",str(chunk_seconds),"-c","copy","-movflags","+faststart",str(source)],timeout=chunk_seconds+45)
                 except Exception as e:
                     if not source.exists() or source.stat().st_size<100000:
                         with LOCK: JOBS[job_id]["capture_warning"]=str(e)[:500]
@@ -235,8 +237,16 @@ async def stream_url(url: str=Form(...), ratio: str=Form("9:16"),
                     out=jobdir/f"highlight_{index:04d}.mp4"
                     render(source,result["clips"],out,ratio)
                     rendered.append(out)
+                    clip_files=[]
+                    for clip_number, candidate in enumerate(result["clips"]):
+                        clip_out=jobdir/f"clip_{index:04d}_{clip_number:02d}.mp4"
+                        render(source,[candidate],clip_out,ratio)
+                        clip_files.append({"file":clip_out.name,"start":candidate["start"],"end":candidate["end"],
+                                           "score":candidate["score"],"title":candidate.get("title","Highlight"),
+                                           "reason":candidate.get("reason",""),"signals":candidate.get("signals",{})})
                     with LOCK:
                         JOBS[job_id]["clips_ready"]+=len(result["clips"])
+                        JOBS[job_id].setdefault("clip_files",[]).extend(clip_files)
                         JOBS[job_id]["latest_analysis"]=result
                         JOBS[job_id]["status"]="clips_available"
                         JOBS[job_id]["latest_clip_index"]=index
@@ -279,3 +289,92 @@ def download(job_id: str):
     if not job or job.get("status")!="complete": raise HTTPException(404,"Output is not ready")
     path=DATA/job_id/"BATATES_highlights.mp4"
     return FileResponse(path,media_type="video/mp4",filename="BATATES_highlights.mp4")
+
+
+@app.post("/jobs/obs")
+async def obs_stream(payload: dict):
+    """Start capture from a stream pushed by OBS to the companion MediaMTX RTMP server."""
+    import re
+    key=str(payload.get("stream_key","")).strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",key):
+        raise HTTPException(400,"Use an 8-80 character stream key containing letters, numbers, _ or -.")
+    ratio=str(payload.get("ratio","9:16"))
+    if ratio not in ("9:16","16:9"): raise HTTPException(400,"ratio must be 9:16 or 16:9")
+    platform=str(payload.get("platform",""))
+    chat_id=str(payload.get("chat_stream_id",""))
+    if platform and platform not in ("twitch","youtube"): raise HTTPException(400,"platform must be twitch or youtube")
+    if platform and not chat_id: raise HTTPException(400,"chat_stream_id is required when chat is enabled")
+    host=os.getenv("BATATES_MEDIAMTX_HOST","mediamtx")
+    url=f"rtmp://{host}:1935/live/{key}"
+    # Reuse the same live capture worker and authorized chat collector.
+    return await stream_url(url,ratio,platform,chat_id,int(payload.get("max_seconds",3600)))
+
+
+@app.get("/jobs/{job_id}/clips")
+def list_job_clips(job_id: str):
+    with LOCK: job=JOBS.get(job_id)
+    if not job: raise HTTPException(404,"Job not found")
+    return {"job_id":job_id,"clips":[{k:v for k,v in item.items() if k!="file"}
+            | {"download":f"/jobs/{job_id}/clips/{i}/download"} for i,item in enumerate(job.get("clip_files",[]))]}
+
+
+@app.get("/jobs/{job_id}/clips/{clip_index}/download")
+def download_job_clip(job_id: str,clip_index: int):
+    with LOCK: job=JOBS.get(job_id)
+    files=job.get("clip_files",[]) if job else []
+    if clip_index<0 or clip_index>=len(files): raise HTTPException(404,"Clip not found")
+    path=DATA/job_id/files[clip_index]["file"]
+    if not path.exists(): raise HTTPException(404,"Clip file is not ready")
+    return FileResponse(path,media_type="video/mp4",filename=f"BATATES_clip_{clip_index+1}.mp4")
+
+
+@app.post("/jobs/{job_id}/edit")
+async def edit_job(job_id: str, payload: dict):
+    """Re-render selected time ranges from an uploaded source as an editable clip sequence."""
+    with LOCK: job=JOBS.get(job_id)
+    if not job: raise HTTPException(404,"Job not found")
+    source_value=job.get("source_path")
+    if not source_value: raise HTTPException(400,"Editing ranges is available for uploaded source videos; select a downloaded live clip for live edits.")
+    source=Path(source_value)
+    if not source.exists(): raise HTTPException(404,"Original source is no longer available")
+    ratio=str(payload.get("ratio","9:16"))
+    if ratio not in ("9:16","16:9"): raise HTTPException(400,"ratio must be 9:16 or 16:9")
+    requested=payload.get("clips",[])
+    if not isinstance(requested,list) or not requested or len(requested)>30: raise HTTPException(400,"Provide 1-30 clip ranges.")
+    duration=media_info(source)
+    ranges=[]
+    for item in requested:
+        try:
+            start=float(item["start"]); end=float(item["end"])
+        except Exception: raise HTTPException(400,"Each clip needs numeric start and end values.")
+        if start<0 or end<=start or end>duration: raise HTTPException(400,"Clip range is outside the source video.")
+        ranges.append({"start":start,"end":end,"score":100})
+    edit_id=uuid.uuid4().hex[:12]
+    edit_dir=DATA/job_id/"edits"; edit_dir.mkdir(parents=True,exist_ok=True)
+    output=edit_dir/f"{edit_id}.mp4"
+    def do_edit():
+        try:
+            render(source,ranges,output,ratio)
+            with LOCK: JOBS[job_id].setdefault("edits",[]).append({"id":edit_id,"file":str(output),"status":"complete"})
+        except Exception as exc:
+            with LOCK: JOBS[job_id].setdefault("edits",[]).append({"id":edit_id,"status":"failed","error":str(exc)[:500]})
+    threading.Thread(target=do_edit,daemon=True).start()
+    return {"edit_id":edit_id,"status":"rendering","poll":f"/jobs/{job_id}/edits/{edit_id}"}
+
+
+@app.get("/jobs/{job_id}/edits/{edit_id}")
+def edit_status(job_id: str,edit_id: str):
+    with LOCK: job=JOBS.get(job_id)
+    if not job: raise HTTPException(404,"Job not found")
+    edit=next((x for x in job.get("edits",[]) if x["id"]==edit_id),None)
+    if not edit: raise HTTPException(404,"Edit not found")
+    return {k:v for k,v in edit.items() if k!="file"} | ({"download":f"/jobs/{job_id}/edits/{edit_id}/download"} if edit.get("status")=="complete" else {})
+
+
+@app.get("/jobs/{job_id}/edits/{edit_id}/download")
+def download_edit(job_id: str,edit_id: str):
+    with LOCK: job=JOBS.get(job_id)
+    if not job: raise HTTPException(404,"Job not found")
+    edit=next((x for x in job.get("edits",[]) if x["id"]==edit_id),None)
+    if not edit or edit.get("status")!="complete": raise HTTPException(404,"Edited output is not ready")
+    return FileResponse(edit["file"],media_type="video/mp4",filename="BATATES_edited.mp4")
