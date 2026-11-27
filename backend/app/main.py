@@ -267,7 +267,7 @@ async def stream_url(url: str=Form(...), ratio: str=Form("9:16"),
             if collector: collector.stop()
             if not rendered: raise RuntimeError("No highlight clips were found during the live capture.")
             listing=jobdir/"live_concat.txt"
-            listing.write_text("".join("file '"+str(p)+"'\\n" for p in rendered),encoding="utf-8")
+            listing.write_text("".join("file '"+str(p)+"'\n" for p in rendered),encoding="utf-8")
             final=jobdir/"BATATES_highlights.mp4"
             run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(listing),"-c","copy","-movflags","+faststart",str(final)])
             with LOCK: JOBS[job_id].update({"status":"complete","download":f"/jobs/{job_id}/download","filename":final.name,"chat_error":collector.error if collector else None})
