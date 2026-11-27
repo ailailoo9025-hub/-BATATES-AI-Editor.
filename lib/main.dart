@@ -55,6 +55,8 @@ class _EditorHomeState extends State<EditorHome> {
   final serverController = TextEditingController();
   final streamController = TextEditingController();
   final chatStreamController = TextEditingController();
+  final obsKeyController = TextEditingController();
+  final List<Map<String, double>> editSegments = [];
   String chatPlatform = '';
   String? activeJobId;
   bool activeStream = false;
@@ -151,8 +153,10 @@ class _EditorHomeState extends State<EditorHome> {
     final best = highlights.isEmpty ? null : (highlights.toList()..sort((a, b) => b['score']!.compareTo(a['score']!))).first;
     final from = auto && best != null ? best['start']! : (auto ? 0.0 : start.clamp(0.0, duration));
     final to = auto && best != null ? best['end']! : (auto ? (duration < 30 ? duration : 30.0) : end.clamp(from + 0.2, duration));
-    if (to - from < 0.2) {
-      setState(() => status = 'Choose a longer section before exporting.');
+    final ranges = auto ? <Map<String,double>>[{'start':from,'end':to}] :
+      (editSegments.isEmpty ? <Map<String,double>>[{'start':from,'end':to}] : List<Map<String,double>>.from(editSegments));
+    if (ranges.any((r) => r['end']! - r['start']! < 0.2)) {
+      setState(() => status = 'Choose longer timeline segments before exporting.');
       return;
     }
     setState(() { busy = true; status = auto ? 'Preparing the highest-scored candidate edit…' : 'Exporting your trimmed video…'; });
@@ -163,10 +167,26 @@ class _EditorHomeState extends State<EditorHome> {
       final vf = ratio == '9:16'
           ? 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920'
           : 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2';
-      final command = '-y -ss ${from.toStringAsFixed(2)} -i ${quote(clips[active].path)} -t ${(to-from).toStringAsFixed(2)} -vf "$vf" -c:v mpeg4 -q:v 4 -c:a aac -b:a 160k -movflags +faststart ${quote(output)}';
-      final session = await FFmpegKit.execute(command);
-      final code = await session.getReturnCode();
-      if (ReturnCode.isSuccess(code) && await File(output).exists()) {
+      final parts = <String>[];
+      for (var i=0; i<ranges.length; i++) {
+        final r = ranges[i];
+        final part = '${dir.path}/BATATES_${stamp}_part_$i.mp4';
+        final command = '-y -ss ${r['start']!.toStringAsFixed(2)} -i ${quote(clips[active].path)} -t ${(r['end']!-r['start']!).toStringAsFixed(2)} -vf "$vf" -c:v mpeg4 -q:v 4 -c:a aac -b:a 160k -movflags +faststart ${quote(part)}';
+        final session = await FFmpegKit.execute(command);
+        if (!ReturnCode.isSuccess(await session.getReturnCode()) || !await File(part).exists()) {
+          throw Exception('Could not render timeline segment ${i+1}.');
+        }
+        parts.add(part);
+      }
+      if (parts.length == 1) {
+        await File(parts.first).copy(output);
+      } else {
+        final listing = '${dir.path}/BATATES_${stamp}_concat.txt';
+        await File(listing).writeAsString(parts.map((p) => "file '$p'\\n").join());
+        final joined = await FFmpegKit.execute('-y -f concat -safe 0 -i ${quote(listing)} -c copy -movflags +faststart ${quote(output)}');
+        if (!ReturnCode.isSuccess(await joined.getReturnCode())) throw Exception('Could not join timeline segments.');
+      }
+      if (await File(output).exists()) {
         if (!mounted) return;
         setState(() => status = 'Export complete: $output');
         await Share.shareXFiles([XFile(output)], text: 'Created with BATATES AI Editor');
@@ -182,7 +202,7 @@ class _EditorHomeState extends State<EditorHome> {
   }
 
   @override
-  void dispose() { player?.dispose(); serverController.dispose(); streamController.dispose(); chatStreamController.dispose(); super.dispose(); }
+  void dispose() { player?.dispose(); serverController.dispose(); streamController.dispose(); chatStreamController.dispose(); obsKeyController.dispose(); super.dispose(); }
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -278,11 +298,20 @@ class _EditorHomeState extends State<EditorHome> {
         onChanged: (value) => setState(() => chatPlatform = value ?? ''),
       ),
       TextField(controller: chatStreamController, decoration: const InputDecoration(labelText: 'اسم قناة Twitch أو معرّف فيديو YouTube')),
-      TextField(controller: streamController, decoration: const InputDecoration(labelText: 'رابط بث مباشر (رابط وسائط مباشر مدعوم)', prefixIcon: Icon(Icons.live_tv))),
+      TextField(controller: streamController, decoration: const InputDecoration(labelText: 'رابط صفحة Twitch أو YouTube أو رابط بث مباشر', prefixIcon: Icon(Icons.live_tv))),
       SizedBox(width: double.infinity, child: OutlinedButton.icon(
         onPressed: busy ? null : () => sendToBackend(stream: true),
         icon: const Icon(Icons.rss_feed),
-        label: const Text('حلّل رابط البث'),
+        label: const Text('حلّل رابط البث المباشر'),
+      )),
+      const Divider(height: 24),
+      const Text('OBS LIVE INGEST', style: TextStyle(color: cyan, fontSize: 11, fontWeight: FontWeight.bold)),
+      TextField(controller: obsKeyController, decoration: const InputDecoration(labelText: 'مفتاح بث OBS الخاص')),
+      const Text('OBS Server: rtmp://YOUR_SERVER_HOST:1935/live  •  Stream key: نفس المفتاح أعلاه', style: TextStyle(color: muted, fontSize: 10)),
+      SizedBox(width: double.infinity, child: OutlinedButton.icon(
+        onPressed: busy ? null : () => sendToBackend(stream: true, obs: true),
+        icon: const Icon(Icons.videocam),
+        label: const Text('ابدأ استقبال بث OBS'),
       )),
       if (activeStream && activeJobId != null)
         OutlinedButton.icon(onPressed: stopLiveCapture, icon: const Icon(Icons.stop_circle_outlined), label: const Text('إيقاف البث وتجهيز المقاطع')),
@@ -327,7 +356,30 @@ class _EditorHomeState extends State<EditorHome> {
         Slider(value: start.clamp(0, (end - .2).clamp(0, 999999)), min: 0, max: (player!.value.duration.inMilliseconds / 1000).clamp(1, 999999).toDouble(), onChanged: (v) => setState(() { start = v; if (end <= start + .2) end = start + .2; })),
         Row(children: [const Text('Trim end', style: TextStyle(color: muted)), const Spacer(), Text('${end.toStringAsFixed(1)}s')]),
         Slider(value: end.clamp((start + .2).clamp(0, 999999), (player!.value.duration.inMilliseconds / 1000).clamp(1, 999999).toDouble()), min: 0, max: (player!.value.duration.inMilliseconds / 1000).clamp(1, 999999).toDouble(), onChanged: (v) => setState(() => end = v)),
+        const SizedBox(height: 6),
+        SizedBox(width: double.infinity, child: OutlinedButton.icon(
+          onPressed: busy ? null : () {
+            if (end - start < 0.2) return;
+            setState(() {
+              editSegments.add({'start':start,'end':end});
+              status = 'Added segment ${editSegments.length} to editable timeline.';
+            });
+          },
+          icon: const Icon(Icons.playlist_add),
+          label: const Text('أضف المقطع المحدد إلى الـ Timeline'),
+        )),
       ] else const Text('Trim controls appear after importing a video.', style: TextStyle(color: muted)),
+      if (editSegments.isNotEmpty) ...[
+        const SizedBox(height: 10),
+        Text('EDIT TIMELINE • ${editSegments.length} segments', style: const TextStyle(color: cyan, fontSize: 11, fontWeight: FontWeight.bold)),
+        ...List.generate(editSegments.length, (i) => ListTile(
+          dense: true, contentPadding: EdgeInsets.zero,
+          leading: Text('#${i+1}', style: const TextStyle(color: cyan)),
+          title: Text('${editSegments[i]['start']!.toStringAsFixed(1)}s — ${editSegments[i]['end']!.toStringAsFixed(1)}s'),
+          trailing: IconButton(icon: const Icon(Icons.close), onPressed: () => setState(() => editSegments.removeAt(i))),
+        )),
+        TextButton.icon(onPressed: () => setState(() => editSegments.clear()), icon: const Icon(Icons.delete_outline), label: const Text('مسح الـ Timeline')),
+      ],
       const SizedBox(height: 8),
       SizedBox(width: double.infinity, child: FilledButton.icon(
         onPressed: busy || clips.isEmpty ? null : () => export(),
@@ -365,14 +417,14 @@ class _EditorHomeState extends State<EditorHome> {
     });
   }
 
-  Future<void> sendToBackend({bool stream = false}) async {
+  Future<void> sendToBackend({bool stream = false, bool obs = false}) async {
     if (busy) return;
     final base = apiBase;
     if (!base.startsWith('http://') && !base.startsWith('https://')) {
       setState(() => backendStatus = 'Enter a valid backend URL first.');
       return;
     }
-    if (stream && streamController.text.trim().isEmpty) {
+    if (stream && !obs && streamController.text.trim().isEmpty) {
       setState(() => backendStatus = 'Paste a supported direct stream media URL first.');
       return;
     }
@@ -382,12 +434,24 @@ class _EditorHomeState extends State<EditorHome> {
     }
     setState(() {
       busy = true;
-      activeStream = stream;
-      backendStatus = stream ? 'Sending stream URL…' : 'Uploading video for AI analysis…';
+      activeStream = stream || obs;
+      backendStatus = obs ? 'Connecting OBS ingest…' : (stream ? 'Resolving live stream page…' : 'Uploading video for AI analysis…');
     });
     try {
       late http.Response response;
-      if (stream) {
+      if (obs) {
+        response = await http.post(
+          Uri.parse('$base/jobs/obs'),
+          headers: {'Content-Type':'application/json'},
+          body: jsonEncode({
+            'stream_key': obsKeyController.text.trim(),
+            'ratio': ratio,
+            'platform': chatPlatform,
+            'chat_stream_id': chatStreamController.text.trim(),
+            'max_seconds': 3600,
+          }),
+        ).timeout(const Duration(seconds: 60));
+      } else if (stream) {
         response = await http.post(
           Uri.parse('$base/jobs/stream'),
           body: {
