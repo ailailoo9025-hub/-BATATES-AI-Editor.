@@ -79,15 +79,39 @@ class _EditorHomeState extends State<EditorHome> {
   }
 
   Future<void> importVideos() async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.video, allowMultiple: true);
+    final result = await FilePicker.platform.pickFiles(type: FileType.video, allowMultiple: true, withData: true);
     if (result == null) return;
-    final files = result.files.where((f) => f.path != null).map((f) => File(f.path!)).toList();
+    final files = <File>[];
+    for (final picked in result.files) {
+      if (picked.path != null) {
+        files.add(File(picked.path!));
+      } else if (picked.bytes != null && picked.bytes!.isNotEmpty) {
+        final dir = await getTemporaryDirectory();
+        final safeName = picked.name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+        final saved = File('${dir.path}/BATATES_import_${DateTime.now().microsecondsSinceEpoch}_$safeName');
+        await saved.writeAsBytes(picked.bytes!, flush: true);
+        files.add(saved);
+      }
+    }
     if (files.isEmpty) {
-      setState(() => status = 'Could not access the selected file path. Try choosing a video stored on the device.');
+      if (mounted) setState(() => status = 'تعذر قراءة الفيديو من مدير الملفات. جرّب حفظه على الجهاز ثم اختره مرة أخرى.');
       return;
     }
+    if (!mounted) return;
     setState(() { clips.addAll(files); status = '${files.length} video(s) added'; });
     await selectClip(clips.length - files.length);
+  }
+
+  Future<void> importAndEdit() async {
+    if (clips.isNotEmpty) {
+      await sendToBackend();
+      return;
+    }
+    final previousCount = clips.length;
+    await importVideos();
+    if (mounted && clips.length > previousCount) {
+      await sendToBackend();
+    }
   }
 
   Future<void> selectClip(int index) async {
@@ -314,7 +338,7 @@ class _EditorHomeState extends State<EditorHome> {
       const SizedBox(height: 12),
       SizedBox(width: double.infinity, child: FilledButton.icon(
         style: FilledButton.styleFrom(backgroundColor: purple, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 18)),
-        onPressed: busy || scanning ? null : (clips.isEmpty ? importVideos : () => sendToBackend()),
+        onPressed: busy || scanning ? null : importAndEdit,
         icon: const Icon(Icons.auto_awesome_rounded, size: 22),
         label: const Text('ارفع فيديو وخلي BATATES يضبطه', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
       )),
