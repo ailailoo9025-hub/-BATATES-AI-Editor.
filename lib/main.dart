@@ -56,9 +56,23 @@ class _EditorHomeState extends State<EditorHome> {
   final streamController = TextEditingController();
   final chatStreamController = TextEditingController();
   String chatPlatform = '';
+  String? activeJobId;
+  bool activeStream = false;
   String backendStatus = 'Backend not connected';
 
   String get apiBase => serverController.text.trim().replaceAll(RegExp(r'/+$'), '');
+
+  Future<void> stopLiveCapture() async {
+    final id = activeJobId;
+    if (id == null) return;
+    try {
+      final response = await http.post(Uri.parse('${apiBase}/jobs/$id/stop')).timeout(const Duration(seconds: 20));
+      if (response.statusCode < 200 || response.statusCode >= 300) throw Exception(response.body);
+      if (mounted) setState(() => backendStatus = 'Stop requested. BATATES is finalizing the montage…');
+    } catch (e) {
+      if (mounted) setState(() => backendStatus = 'Could not stop live capture: $e');
+    }
+  }
 
   Future<void> importVideos() async {
     final result = await FilePicker.platform.pickFiles(type: FileType.video, allowMultiple: true);
@@ -270,6 +284,8 @@ class _EditorHomeState extends State<EditorHome> {
         icon: const Icon(Icons.rss_feed),
         label: const Text('حلّل رابط البث'),
       )),
+      if (activeStream && activeJobId != null)
+        OutlinedButton.icon(onPressed: busy ? null : stopLiveCapture, icon: const Icon(Icons.stop_circle_outlined), label: const Text('إيقاف البث وتجهيز المقاطع')),
       Text(backendStatus, style: const TextStyle(color: cyan, fontSize: 11)),
       const SizedBox(height: 8),
       const Text('ملاحظة: رابط الفيديو يجب أن يكون رابط وسائط مباشرًا مسموحًا. الشات المباشر يعتمد على إعداد مفاتيح API للخادم وصلاحيات المنصة.', style: TextStyle(color: muted, fontSize: 10)),
@@ -371,14 +387,14 @@ class _EditorHomeState extends State<EditorHome> {
       if (response.statusCode < 200 || response.statusCode >= 300) throw Exception(response.body);
       final job = jsonDecode(response.body) as Map<String, dynamic>;
       final id = job['job_id'] as String;
-      setState(() => backendStatus = 'BATATES is analyzing job $id…');
+      if (mounted) setState(() { activeJobId = id; activeStream = stream; backendStatus = 'BATATES is analyzing job $id…'; });
       for (var attempt = 0; attempt < 1200; attempt++) {
         await Future.delayed(const Duration(seconds: 3));
         final check = await http.get(Uri.parse('$base/jobs/$id')).timeout(const Duration(seconds: 30));
         if (check.statusCode != 200) throw Exception('Could not read job status: ${check.body}');
         final data = jsonDecode(check.body) as Map<String, dynamic>;
         final state = data['status']?.toString() ?? 'unknown';
-        if (mounted) setState(() => backendStatus = 'AI job $id: $state');
+        if (mounted) setState(() => backendStatus = 'AI job $id: $state • clips: ${data['clips_ready'] ?? 0}');
         if (state == 'failed') throw Exception(data['error'] ?? 'Processing failed');
         if (state == 'complete') {
           final fileResponse = await http.get(Uri.parse('$base/jobs/$id/download')).timeout(const Duration(minutes: 15));
@@ -387,13 +403,13 @@ class _EditorHomeState extends State<EditorHome> {
           final output = File('${dir.path}/BATATES_${DateTime.now().millisecondsSinceEpoch}.mp4');
           await output.writeAsBytes(fileResponse.bodyBytes);
           await SharePlus.instance.share(ShareParams(files: [XFile(output.path)], text: 'Created with BATATES AI Editor'));
-          if (mounted) setState(() => backendStatus = 'Finished! Your montage is ready to share.');
+          if (mounted) setState(() { backendStatus = 'Finished! Your montage is ready to share.'; activeStream = false; activeJobId = null; });
           return;
         }
       }
       throw Exception('Processing timed out. Check the backend job status.');
     } catch (e) {
-      if (mounted) setState(() => backendStatus = 'Backend error: $e');
+      if (mounted) setState(() { backendStatus = 'Backend error: $e'; activeStream = false; activeJobId = null; });
     } finally {
       if (mounted) setState(() => busy = false);
     }
