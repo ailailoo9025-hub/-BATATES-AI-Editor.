@@ -285,7 +285,7 @@ class _EditorHomeState extends State<EditorHome> {
         label: const Text('حلّل رابط البث'),
       )),
       if (activeStream && activeJobId != null)
-        OutlinedButton.icon(onPressed: busy ? null : stopLiveCapture, icon: const Icon(Icons.stop_circle_outlined), label: const Text('إيقاف البث وتجهيز المقاطع')),
+        OutlinedButton.icon(onPressed: stopLiveCapture, icon: const Icon(Icons.stop_circle_outlined), label: const Text('إيقاف البث وتجهيز المقاطع')),
       Text(backendStatus, style: const TextStyle(color: cyan, fontSize: 11)),
       const SizedBox(height: 8),
       const Text('ملاحظة: رابط الفيديو يجب أن يكون رابط وسائط مباشرًا مسموحًا. الشات المباشر يعتمد على إعداد مفاتيح API للخادم وصلاحيات المنصة.', style: TextStyle(color: muted, fontSize: 10)),
