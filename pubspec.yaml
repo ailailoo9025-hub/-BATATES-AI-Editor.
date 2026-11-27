@@ -1,0 +1,25 @@
+name: batates_ai_editor
+description: BATATES AI Editor - tablet-first video import, preview, trim and export highlight detection starter.
+publish_to: 'none'
+version: 0.3.0+3
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  file_picker: ^10.3.7
+  video_player: ^2.10.0
+  path_provider: ^2.1.5
+  ffmpeg_kit_flutter_new_full: ^3.0.0
+  share_plus: ^12.0.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
