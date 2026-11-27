@@ -26,10 +26,14 @@ def run(cmd, timeout=3600):
 
 def safe_url(value: str) -> str:
     u = urlparse(value)
-    if u.scheme not in ("http", "https") or not u.hostname:
-        raise HTTPException(400, "Use a valid http(s) media URL.")
-    host = u.hostname.lower()
-    if host in ("localhost", "127.0.0.1", "::1") or host.endswith(".local"):
+    host = (u.hostname or "").lower()
+    if u.scheme not in ("http", "https", "rtmp") or not host:
+        raise HTTPException(400, "Use a supported public stream URL.")
+    if u.scheme == "rtmp":
+        allowed = os.getenv("BATATES_MEDIAMTX_HOST", "mediamtx").lower()
+        if host != allowed:
+            raise HTTPException(400, "RTMP input is restricted to the configured OBS ingest service.")
+    elif host in ("localhost", "127.0.0.1", "::1") or host.endswith(".local"):
         raise HTTPException(400, "Local network URLs are not accepted.")
     return value
 
@@ -194,6 +198,12 @@ async def stream_url(url: str=Form(...), ratio: str=Form("9:16"),
                      max_seconds: int=Form(3600)):
     # Direct, authorized media URLs only. Platform watch pages/DRM are not bypassed.
     url=safe_url(url)
+    from .stream_sources import classify_page
+    inferred_platform,inferred_id=classify_page(url)
+    if not platform and inferred_platform:
+        platform=inferred_platform
+    if not chat_stream_id and inferred_id:
+        chat_stream_id=inferred_id
     if ratio not in ("9:16","16:9"): raise HTTPException(400,"ratio must be 9:16 or 16:9")
     max_seconds=max(60,min(max_seconds,7200))
     if platform and platform not in ("twitch","youtube"): raise HTTPException(400,"platform must be twitch or youtube")
