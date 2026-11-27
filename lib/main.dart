@@ -182,7 +182,7 @@ class _EditorHomeState extends State<EditorHome> {
         await File(parts.first).copy(output);
       } else {
         final listing = '${dir.path}/BATATES_${stamp}_concat.txt';
-        await File(listing).writeAsString(parts.map((p) => "file '$p'\\n").join());
+        await File(listing).writeAsString(parts.map((p) => "file '$p'\n").join());
         final joined = await FFmpegKit.execute('-y -f concat -safe 0 -i ${quote(listing)} -c copy -movflags +faststart ${quote(output)}');
         if (!ReturnCode.isSuccess(await joined.getReturnCode())) throw Exception('Could not join timeline segments.');
       }
