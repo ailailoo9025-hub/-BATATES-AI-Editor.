@@ -134,6 +134,18 @@ def analyze(path: Path, jobdir: Path, chat_path: Optional[Path]):
         t=event["time"]
         candidates.append({"start":max(0,t-8),"end":min(duration,t+10),"score":round(event["score"],1),
           "signals":{"semantic_vision":True},"title":event["title"],"reason":event["reason"]})
+    # Keep the automatic edit usable for quiet clips or videos without detectable peaks.
+    # This is explicitly marked as a fallback, not as an AI-understood highlight.
+    if not candidates and duration > 0:
+        fallback_length = min(20.0, duration)
+        candidates.append({
+            "start": 0.0,
+            "end": fallback_length,
+            "score": 20.0,
+            "signals": {"fallback_segment": True},
+            "title": "Automatic fallback segment",
+            "reason": "No strong highlight signals were detected; exported a starter segment so the job can still complete."
+        })
     candidates.sort(key=lambda x:x["score"],reverse=True)
     chosen=[]
     for c in candidates:
