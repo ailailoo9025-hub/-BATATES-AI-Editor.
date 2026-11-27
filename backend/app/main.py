@@ -178,19 +178,23 @@ async def upload_video(video: UploadFile=File(...), chat: Optional[UploadFile]=F
     return {"job_id":job_id,"status":"queued","poll":f"/jobs/{job_id}"}
 
 @app.post("/jobs/stream")
-def stream_url(url: str=Form(...), ratio: str=Form("9:16")):
+async def stream_url(url: str=Form(...), ratio: str=Form("9:16"), chat: Optional[UploadFile]=File(None)):
     # Accept direct, user-authorized media URLs only; platform pages/DRM/login bypass is not attempted.
     url=safe_url(url)
     if ratio not in ("9:16","16:9"): raise HTTPException(400,"ratio must be 9:16 or 16:9")
     job_id=uuid.uuid4().hex[:12]; jobdir=DATA/job_id; jobdir.mkdir(parents=True)
     source=jobdir/"stream_capture.mp4"
+    chat_path=None
+    if chat:
+        chat_path=jobdir/"chat.json"
+        chat_path.write_bytes(await chat.read())
     with LOCK: JOBS[job_id]={"id":job_id,"status":"capturing","created":__import__("time").time()}
     def capture():
         try:
             # Capture a bounded 10-minute segment; continuous live clipping requires a persistent stream worker.
             run(["ffmpeg","-y","-i",url,"-t","600","-c","copy",str(source)],timeout=660)
             with LOCK: JOBS[job_id]["status"]="queued"
-            worker(job_id,source,None,ratio)
+            worker(job_id,source,chat_path,ratio)
         except Exception as e:
             with LOCK: JOBS[job_id].update({"status":"failed","error":str(e)[:1000]})
     threading.Thread(target=capture,daemon=True).start()
