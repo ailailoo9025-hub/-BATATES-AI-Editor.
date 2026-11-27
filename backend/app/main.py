@@ -7,10 +7,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import cv2
 import numpy as np
+from .vision import semantic_events
+from .chat_connectors import ChatCollector
 
 DATA = Path(os.getenv("BATATES_DATA_DIR", "/data"))
 DATA.mkdir(parents=True, exist_ok=True)
 JOBS = {}
+CHAT_COLLECTORS = {}
 LOCK = threading.Lock()
 app = FastAPI(title="BATATES AI Processing API", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -101,6 +104,10 @@ def analyze(path: Path, jobdir: Path, chat_path: Optional[Path]):
     visual=visual_windows(path,duration)
     chat=chat_peaks(chat_path,duration)
     transcript=transcribe(path)
+    try:
+        vision=semantic_events(path,duration)
+    except Exception as e:
+        vision={"enabled":True,"events":[],"reason":str(e)[:300]}
     words=("ضحك","هههه","lol","lmao","laugh","wow","what","no way","amazing","insane","يا ساتر","مستحيل")
     candidates=[]
     for start,end,db in audio:
@@ -116,6 +123,10 @@ def analyze(path: Path, jobdir: Path, chat_path: Optional[Path]):
             candidates.append({"start":max(0,start-2),"end":min(duration,end+3),"score":round(score,1),
                                "signals":{"audio":round(energy,2),"visual_change":round(motion,3),"chat":round(chat_score,2),"transcript_hint":bool(text_score)},
                                "transcript":speech[:300]})
+    for event in vision.get("events",[]):
+        t=event["time"]
+        candidates.append({"start":max(0,t-8),"end":min(duration,t+10),"score":round(event["score"],1),
+          "signals":{"semantic_vision":True},"title":event["title"],"reason":event["reason"]})
     candidates.sort(key=lambda x:x["score"],reverse=True)
     chosen=[]
     for c in candidates:
@@ -123,7 +134,7 @@ def analyze(path: Path, jobdir: Path, chat_path: Optional[Path]):
             chosen.append(c)
         if len(chosen)>=8: break
     chosen.sort(key=lambda x:x["start"])
-    return {"duration":duration,"clips":chosen,"transcript":transcript,"chat_available":bool(chat),"analysis":"Audio energy + visual scene-change + optional timestamped chat + optional transcript. Not a semantic vision model."}
+    return {"duration":duration,"clips":chosen,"transcript":transcript,"chat_available":bool(chat),"vision":vision,"analysis":"Semantic vision when configured, plus audio energy, scene-change, timestamped chat and optional transcript."}
 
 def render(path: Path, clips, out: Path, ratio: str):
     if not clips: raise RuntimeError("No highlight candidates. Try a longer/clearer recording.")
@@ -159,7 +170,7 @@ def new_job(source: Path, chat_path: Optional[Path], ratio: str):
 
 @app.get("/health")
 def health():
-    return {"ok":True,"service":"BATATES","features":{"upload":True,"direct_media_url":True,"chat_json":True,"optional_whisper":bool(os.getenv("BATATES_WHISPER_MODEL"))}}
+    return {"ok":True,"service":"BATATES","features":{"upload":True,"direct_media_url":True,"semantic_vision_configurable":True,"twitch_chat":True,"youtube_chat":bool(os.getenv("BATATES_YOUTUBE_API_KEY")),"optional_whisper":bool(os.getenv("BATATES_WHISPER_MODEL")),"chunked_live_capture":True}}
 
 @app.post("/jobs/upload")
 async def upload_video(video: UploadFile=File(...), chat: Optional[UploadFile]=File(None), ratio: str=Form("9:16")):
@@ -178,27 +189,83 @@ async def upload_video(video: UploadFile=File(...), chat: Optional[UploadFile]=F
     return {"job_id":job_id,"status":"queued","poll":f"/jobs/{job_id}"}
 
 @app.post("/jobs/stream")
-async def stream_url(url: str=Form(...), ratio: str=Form("9:16"), chat: Optional[UploadFile]=File(None)):
-    # Accept direct, user-authorized media URLs only; platform pages/DRM/login bypass is not attempted.
+async def stream_url(url: str=Form(...), ratio: str=Form("9:16"),
+                     platform: str=Form(""), chat_stream_id: str=Form(""),
+                     max_seconds: int=Form(3600)):
+    # Direct, authorized media URLs only. Platform watch pages/DRM are not bypassed.
     url=safe_url(url)
     if ratio not in ("9:16","16:9"): raise HTTPException(400,"ratio must be 9:16 or 16:9")
+    max_seconds=max(60,min(max_seconds,7200))
+    if platform and platform not in ("twitch","youtube"): raise HTTPException(400,"platform must be twitch or youtube")
+    if platform and not chat_stream_id: raise HTTPException(400,"chat_stream_id is required when platform chat is enabled")
     job_id=uuid.uuid4().hex[:12]; jobdir=DATA/job_id; jobdir.mkdir(parents=True)
-    source=jobdir/"stream_capture.mp4"
-    chat_path=None
-    if chat:
-        chat_path=jobdir/"chat.json"
-        chat_path.write_bytes(await chat.read())
-    with LOCK: JOBS[job_id]={"id":job_id,"status":"capturing","created":__import__("time").time()}
+    with LOCK: JOBS[job_id]={"id":job_id,"status":"capturing","created":__import__("time").time(),"clips_ready":0}
     def capture():
+        collector=None
+        rendered=[]
+        started=__import__("time").time()
         try:
-            # Capture a bounded 10-minute segment; continuous live clipping requires a persistent stream worker.
-            run(["ffmpeg","-y","-i",url,"-t","600","-c","copy",str(source)],timeout=660)
-            with LOCK: JOBS[job_id]["status"]="queued"
-            worker(job_id,source,chat_path,ratio)
+            if platform:
+                collector=ChatCollector()
+                collector.start(platform,chat_stream_id)
+                CHAT_COLLECTORS[job_id]=collector
+            chunk_seconds=60
+            for index in range(max_seconds//chunk_seconds):
+                with LOCK:
+                    if JOBS[job_id].get("stop_requested"): break
+                    JOBS[job_id]["status"]="capturing"
+                    JOBS[job_id]["current_chunk"]=index+1
+                source=jobdir/f"live_{index:04d}.mp4"
+                try:
+                    run(["ffmpeg","-y","-i",url,"-t",str(chunk_seconds),"-c","copy","-movflags","+faststart",str(source)],timeout=chunk_seconds+45)
+                except Exception as e:
+                    if not source.exists() or source.stat().st_size<100000:
+                        with LOCK: JOBS[job_id]["capture_warning"]=str(e)[:500]
+                        break
+                if not source.exists() or source.stat().st_size<100000: break
+                chat_path=None
+                if collector:
+                    rows=[{"timestamp":max(0,row["timestamp"]-started-(index*chunk_seconds)),"text":row["text"]}
+                          for row in collector.rows if started+(index*chunk_seconds)<=row["timestamp"]<started+((index+1)*chunk_seconds)]
+                    chat_path=jobdir/f"chat_{index:04d}.json"
+                    chat_path.write_text(json.dumps(rows,ensure_ascii=False),encoding="utf-8")
+                with LOCK: JOBS[job_id]["status"]="analyzing_chunk"
+                result=analyze(source,jobdir,chat_path)
+                if result["clips"]:
+                    out=jobdir/f"highlight_{index:04d}.mp4"
+                    render(source,result["clips"],out,ratio)
+                    rendered.append(out)
+                    with LOCK:
+                        JOBS[job_id]["clips_ready"]+=len(result["clips"])
+                        JOBS[job_id]["latest_analysis"]=result
+                        JOBS[job_id]["status"]="clips_available"
+                        JOBS[job_id]["latest_clip_index"]=index
+                if __import__("time").time()-started>=max_seconds: break
+            if collector: collector.stop()
+            if not rendered: raise RuntimeError("No highlight clips were found during the live capture.")
+            listing=jobdir/"live_concat.txt"
+            listing.write_text("".join("file '"+str(p)+"'\\n" for p in rendered),encoding="utf-8")
+            final=jobdir/"BATATES_highlights.mp4"
+            run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(listing),"-c","copy","-movflags","+faststart",str(final)])
+            with LOCK: JOBS[job_id].update({"status":"complete","download":f"/jobs/{job_id}/download","filename":final.name,"chat_error":collector.error if collector else None})
         except Exception as e:
-            with LOCK: JOBS[job_id].update({"status":"failed","error":str(e)[:1000]})
+            if collector: collector.stop()
+            with LOCK: JOBS[job_id].update({"status":"failed","error":str(e)[:1000],"chat_error":collector.error if collector else None})
+        finally:
+            CHAT_COLLECTORS.pop(job_id,None)
     threading.Thread(target=capture,daemon=True).start()
-    return {"job_id":job_id,"status":"capturing","note":"Direct authorized media URL only; platform watch-page links may not work.","poll":f"/jobs/{job_id}"}
+    return {"job_id":job_id,"status":"capturing","chunk_seconds":60,"max_seconds":max_seconds,
+            "chat_enabled":bool(platform),"note":"Captures direct authorized media in 60-second chunks; watch-page URLs may not work.","poll":f"/jobs/{job_id}"}
+
+@app.post("/jobs/{job_id}/stop")
+def stop_live_job(job_id: str):
+    with LOCK:
+        job=JOBS.get(job_id)
+        if not job: raise HTTPException(404,"Job not found")
+        job["stop_requested"]=True
+    collector=CHAT_COLLECTORS.get(job_id)
+    if collector: collector.stop()
+    return {"job_id":job_id,"stop_requested":True}
 
 @app.get("/jobs/{job_id}")
 def job_status(job_id: str):
