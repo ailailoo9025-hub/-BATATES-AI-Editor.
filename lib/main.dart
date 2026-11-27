@@ -54,9 +54,13 @@ class _EditorHomeState extends State<EditorHome> {
   String ratio = '9:16';
   final serverController = TextEditingController(text: 'http://10.0.2.2:8080');
   final streamController = TextEditingController();
+  final chatStreamController = TextEditingController();
+  String chatPlatform = '';
   String backendStatus = 'Backend not connected';
 
-  String get apiBase => serverController.text.trim().replaceAll(RegExp(r'/+
+  String get apiBase => serverController.text.trim().replaceAll(RegExp(r'/+$'), '');
+
+  Future<void> importVideos() async {
     final result = await FilePicker.platform.pickFiles(type: FileType.video, allowMultiple: true);
     if (result == null) return;
     final files = result.files.where((f) => f.path != null).map((f) => File(f.path!)).toList();
@@ -164,7 +168,7 @@ class _EditorHomeState extends State<EditorHome> {
   }
 
   @override
-  void dispose() { player?.dispose(); serverController.dispose(); streamController.dispose(); super.dispose(); }
+  void dispose() { player?.dispose(); serverController.dispose(); streamController.dispose(); chatStreamController.dispose(); super.dispose(); }
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -253,6 +257,13 @@ class _EditorHomeState extends State<EditorHome> {
         icon: const Icon(Icons.chat_bubble_outline),
         label: Text(chatFile == null ? 'إرفاق شات بصيغة JSON (اختياري)' : 'تم إرفاق ملف الشات'),
       ),
+      DropdownButtonFormField<String>(
+        value: chatPlatform.isEmpty ? null : chatPlatform,
+        decoration: const InputDecoration(labelText: 'منصة الشات المباشر (اختياري)'),
+        items: const [DropdownMenuItem(value: 'twitch', child: Text('Twitch')), DropdownMenuItem(value: 'youtube', child: Text('YouTube'))],
+        onChanged: (value) => setState(() => chatPlatform = value ?? ''),
+      ),
+      TextField(controller: chatStreamController, decoration: const InputDecoration(labelText: 'اسم قناة Twitch أو معرّف فيديو YouTube')),
       TextField(controller: streamController, decoration: const InputDecoration(labelText: 'رابط بث مباشر (رابط وسائط مباشر مدعوم)', prefixIcon: Icon(Icons.live_tv))),
       SizedBox(width: double.infinity, child: OutlinedButton.icon(
         onPressed: busy ? null : () => sendToBackend(stream: true),
@@ -261,7 +272,7 @@ class _EditorHomeState extends State<EditorHome> {
       )),
       Text(backendStatus, style: const TextStyle(color: cyan, fontSize: 11)),
       const SizedBox(height: 8),
-      const Text('ملاحظة: روابط صفحات يوتيوب/تويتش ليست بالضرورة روابط بث مباشرة قابلة للمعالجة. الشات يُضاف حاليًا عبر ملف JSON موقّت على الخادم.', style: TextStyle(color: muted, fontSize: 10)),
+      const Text('ملاحظة: رابط الفيديو يجب أن يكون رابط وسائط مباشرًا مسموحًا. الشات المباشر يعتمد على إعداد مفاتيح API للخادم وصلاحيات المنصة.', style: TextStyle(color: muted, fontSize: 10)),
 
       const SizedBox(height: 10),
       SizedBox(width: double.infinity, child: OutlinedButton.icon(
@@ -348,7 +359,7 @@ class _EditorHomeState extends State<EditorHome> {
       late http.Response response;
       if (stream) {
         final uri = Uri.parse('$base/jobs/stream');
-        response = await http.post(uri, body: {'url': streamController.text.trim(), 'ratio': ratio}).timeout(const Duration(seconds: 60));
+        response = await http.post(uri, body: {'url': streamController.text.trim(), 'ratio': ratio, 'platform': chatPlatform, 'chat_stream_id': chatStreamController.text.trim(), 'max_seconds': '3600'}).timeout(const Duration(seconds: 60));
       } else {
         if (clips.isEmpty) { setState(() => backendStatus = 'Import a video first.'); return; }
         final uri = Uri.parse('$base/jobs/upload');
