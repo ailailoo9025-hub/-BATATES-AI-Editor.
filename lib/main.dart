@@ -191,8 +191,7 @@ class _EditorHomeState extends State<EditorHome> {
         setState(() => status = 'Export complete: $output');
         await Share.shareXFiles([XFile(output)], text: 'Created with BATATES AI Editor');
       } else {
-        final logs = (await session.getLogs()).map((l) => l.getMessage()).join('\n');
-        throw Exception(logs.isEmpty ? 'FFmpeg export failed ($code)' : logs);
+        throw Exception('FFmpeg export did not create the output file.');
       }
     } catch (e) {
       if (mounted) setState(() => status = 'Export error: $e');
