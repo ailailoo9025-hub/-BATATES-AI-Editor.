@@ -1,45 +1,87 @@
-# BATATES capture and AI roadmap
+# BATATES — product specification and implementation roadmap
 
-This document defines the intended product behavior. It is a roadmap, not a claim that every feature is already implemented.
+## The user experience: one input, automatic result
 
-## Three capture modes
+The main screen must offer two equally clear ways to start a job:
+1. **Paste a live-stream link**.
+2. **Upload one or more video files**.
 
-### A. Uploaded / local videos
-- Select one or many local video files.
-- Analyze each asset and produce a ranked candidate list with timestamps.
-- Combine selected moments into a vertical or landscape short.
-- Preserve source references and allow manual trim adjustments.
-- Current prototype: local file import, preview, manual trim, one-clip export, and audio-energy candidate scan. It does not yet perform semantic visual understanding or multi-clip montage editing.
+The user should not need to configure OBS for the normal workflow. OBS is an optional capture source for streams that cannot be accessed directly or when the user wants to send a private production feed.
 
-### B. Stream URL
-- Accept a stream URL only for providers and stream formats that permit authorized access.
-- Resolve the stream through an approved provider API or a user-authorized ingest endpoint.
-- Do not bypass DRM, login restrictions, paywalls, platform safeguards, or download restrictions.
-- Analyze rolling segments while the stream is live, retain a configurable buffer, and save candidate timestamps.
-- If a platform blocks direct ingest, instruct the user to use OBS or a supported relay instead.
+After choosing either input, BATATES should run the same automatic pipeline and produce a reviewable set of finished clips.
 
-### C. OBS live input
-- Preferred implementation: OBS sends an authenticated stream to a local or cloud ingest service (for example, an RTMP/SRT/WebRTC endpoint).
-- The service segments the feed, analyzes video/audio, and returns candidate moments to the app.
-- OBS WebSocket may be used for user-authorized scene/source control and status, but it is not itself the video transport.
-- Display connection status, dropped frames, latency, and recording state.
+## Automatic editing pipeline
 
-## AI analysis pipeline
-1. Scene sampling and visual event detection.
-2. Speech-to-text with timestamps and speaker segmentation where supported.
-3. Audio event and excitement scoring (laughter, applause, surprise, shouting, game sounds); loudness alone is not enough.
-4. Multimodal ranking using visual context, transcript, audio events, and optional chat reactions.
-5. Candidate explanation: why selected, start/end timestamps, confidence, and detected event.
-6. Human review and editable timeline before export.
+For every uploaded video or supported live-stream segment:
+1. Ingest media through a permitted source or user-authorized connection.
+2. Analyze sampled video frames for scene changes, visible actions, reactions, game events, and other context.
+3. Analyze audio for speech, laughter, applause, surprise, and meaningful sound events. Loudness alone must never decide that a moment is a highlight.
+4. Transcribe speech with timestamps where supported.
+5. Read live chat when the platform exposes an authorized chat API or the user supplies an authorized chat feed. Align chat spikes/repeated reactions with media timestamps. Never promise chat access for platforms or links that do not expose it.
+6. Rank candidate moments using visual context, transcript, audio events, and optional chat reactions.
+7. Expand each moment to include useful context before and after the event; avoid cutting off the setup or punchline.
+8. Assemble multiple selected moments into a coherent montage, remove dead time, and optionally add captions, reframing, transitions, and restrained sound effects.
+9. Export ready-to-post versions (vertical 9:16 and landscape 16:9), with editable timeline and per-clip controls.
 
-## Product behavior
-- Every candidate is reviewable and editable.
-- Provide "best moments", "funny", "action", "surprise", "reaction", and custom search modes.
-- Never claim a moment is funny or important based only on volume.
-- Offer local/on-device processing where feasible and clearly label cloud processing and any required API credentials.
-- Do not collect stream credentials in plain text; use secure credential storage and least-privilege access.
+Every suggested clip should show its timestamps, reason for selection, and confidence so the user can review it.
 
-## Current implementation status
-- Available in prototype: local video selection, preview, trim controls, aspect-ratio choice, FFmpeg export/share, audio loudness window scan.
-- Not implemented yet: direct platform stream ingest, OBS ingest, semantic vision model, speech transcription, chat reaction analysis, multi-clip timeline/montage, background live monitoring.
-- The Android app alone cannot reliably ingest every platform URL. A companion ingest/analysis service and provider-specific integrations are required.
+## Input modes
+
+### 1. Uploaded video files
+- Accept one or multiple local files.
+- Analyze the full set, not just the currently previewed file.
+- Generate multiple candidate moments across the files.
+- Build a multi-clip montage with ordering, trimming, and transitions.
+- Keep source timestamps and allow the user to change selections before export.
+
+### 2. Live-stream URL
+- The user pastes a link; BATATES detects whether the provider and stream format are supported.
+- Use only official/authorized APIs or permitted stream access.
+- For supported live sources, analyze rolling segments while the stream is live and save highlights as they happen.
+- For unsupported, private, login-restricted, DRM-protected, or otherwise inaccessible sources, explain the limitation and offer upload or optional OBS ingest. Do not bypass platform restrictions.
+
+### 3. Optional OBS input
+- OBS is an optional fallback/advanced source, not a required step for ordinary uploads or supported stream URLs.
+- Use an authenticated RTMP/SRT/WebRTC ingest endpoint to receive the actual video/audio feed.
+- OBS WebSocket can support authorized control/status but does not itself carry the video feed.
+- Show connection state, latency, dropped frames, and recording/analysis state.
+
+## Chat analysis
+- Chat integration is provider-specific and must be authorized.
+- Ingest timestamped messages/reaction events where available.
+- Detect bursts of repeated reactions and correlate them with the stream timeline.
+- Treat chat as a ranking signal, not proof that a moment is funny or important.
+- If chat is unavailable, continue video/audio analysis and clearly label chat analysis as unavailable.
+
+## Output and editing
+- Produce several clips by default when enough strong moments exist, not only one trim.
+- Offer presets such as Best moments, Funny, Action, Surprise, Reaction, and custom keywords.
+- Generate captions from speech where transcription is supported; allow correction.
+- Provide 9:16 and 16:9 exports.
+- Provide a review screen and editable clip timeline before final export.
+- Do not add music or effects that obscure speech; keep effects adjustable.
+
+## Architecture required for full functionality
+- Android client: input selection, job status, preview, review, timeline editing, export/share.
+- Processing service: media ingestion, segmentation, speech transcription, visual/audio analysis, highlight ranking, montage rendering.
+- Provider adapters: separate authorized stream and chat connectors per platform.
+- Secure job storage and credential handling; never store platform passwords or stream tokens in plain text.
+- Clearly label cloud processing, data retention, and any required provider credentials. Prefer local processing when feasible.
+
+## Current implementation status — verified from repository source
+- Implemented in the current prototype: local video file selection, preview, manual trim controls, 9:16/16:9 selection, FFmpeg export/share, and an audio-loudness candidate scan.
+- Not implemented: pasted live-stream URL ingestion, OBS video ingest, platform chat connectors, semantic visual understanding, speech transcription, multi-file analysis, multi-clip montage, automatic captions, and live background monitoring.
+- The current audio scan is only a rough signal detector; it is not semantic AI and cannot reliably identify funny or meaningful moments.
+- A backend and provider-specific integrations are required for the full automatic workflow. A mobile APK alone cannot guarantee access to every platform's streams or chat.
+
+## Release acceptance checklist
+- [ ] User can choose either Paste stream link or Upload video from the same start screen.
+- [ ] Unsupported links fail with a clear explanation and a supported alternative.
+- [ ] Uploaded files are analyzed across their full duration and across all selected files.
+- [ ] Visual, audio, transcript, and available chat signals are combined.
+- [ ] Multiple clips are selected and assembled into a montage.
+- [ ] Captions are editable and timestamps are preserved.
+- [ ] User can review and edit the timeline before export.
+- [ ] Vertical and landscape outputs render and play correctly.
+- [ ] Live jobs show connection/analysis state and recover gracefully from disconnects.
+- [ ] Automated Android build and a real-device smoke test pass.
