@@ -143,28 +143,39 @@ def analyze(path: Path, jobdir: Path, chat_path: Optional[Path]):
     chosen.sort(key=lambda x:x["start"])
     return {"duration":duration,"clips":chosen,"transcript":transcript,"chat_available":bool(chat),"vision":vision,"analysis":"Semantic vision when configured, plus audio energy, scene-change, timestamped chat and optional transcript."}
 
-def render(path: Path, clips, out: Path, ratio: str):
+def render(path: Path, clips, out: Path, ratio: str, style: str = "professional"):
+    """Free FFmpeg finishing pass: crop, style-specific grade, audio leveling and fades."""
+    if style not in ("funny", "gaming", "professional"):
+        style = "professional"
     if not clips: raise RuntimeError("No highlight candidates. Try a longer/clearer recording.")
     work=out.parent/"parts"; work.mkdir(exist_ok=True)
-    vf=("scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" if ratio=="9:16"
+    base_vf=("scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" if ratio=="9:16"
         else "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2")
+    grades = {
+        "funny": "eq=contrast=1.12:saturation=1.28:brightness=0.015,unsharp=5:5:0.65:3:3:0.25",
+        "gaming": "eq=contrast=1.18:saturation=1.12:brightness=0.005,unsharp=7:7:0.8:5:5:0.35",
+        "professional": "eq=contrast=1.04:saturation=1.05:brightness=0,unsharp=5:5:0.35"
+    }
+    vf=base_vf+","+grades[style]+",fade=t=in:st=0:d=0.25"
     parts=[]
     for i,c in enumerate(clips):
         part=work/f"{i:02d}.mp4"
-        run(["ffmpeg","-y","-ss",str(c["start"]),"-i",str(path),"-t",str(max(.5,c["end"]-c["start"])),"-vf",vf,"-r","30","-c:v","libx264","-preset","veryfast","-crf","22","-c:a","aac","-b:a","160k","-movflags","+faststart",str(part)])
+        length=max(.5,c["end"]-c["start"])
+        audio_filter="loudnorm=I=-16:TP=-1.5:LRA=11,highpass=f=70,acompressor=threshold=0.12:ratio=2.5:attack=20:release=180"
+        run(["ffmpeg","-y","-ss",str(c["start"]),"-i",str(path),"-t",str(length),"-vf",vf+",fade=t=out:st="+str(max(0,length-0.25))+":d=0.25","-af",audio_filter,"-r","30","-c:v","libx264","-preset","veryfast","-crf","21","-c:a","aac","-b:a","192k","-movflags","+faststart",str(part)])
         parts.append(part)
     listing=work/"concat.txt"
     listing.write_text("".join("file '"+str(p).replace("'","'\\''")+"'\n" for p in parts),encoding="utf-8")
     run(["ffmpeg","-y","-f","concat","-safe","0","-i",str(listing),"-c","copy","-movflags","+faststart",str(out)])
     return out
 
-def worker(job_id, source, chat_path, ratio):
+def worker(job_id, source, chat_path, ratio, style="professional"):
     jobdir=DATA/job_id
     try:
         with LOCK: JOBS[job_id]["status"]="analyzing"
         result=analyze(source,jobdir,chat_path)
         with LOCK: JOBS[job_id].update({"status":"rendering","analysis":result})
-        output=render(source,result["clips"],jobdir/"BATATES_highlights.mp4",ratio)
+        output=render(source,result["clips"],jobdir/"BATATES_highlights.mp4",ratio,style)
         with LOCK: JOBS[job_id].update({"status":"complete","download":f"/jobs/{job_id}/download","filename":output.name})
     except Exception as e:
         with LOCK: JOBS[job_id].update({"status":"failed","error":str(e)[:1000]})
@@ -172,7 +183,7 @@ def worker(job_id, source, chat_path, ratio):
 def new_job(source: Path, chat_path: Optional[Path], ratio: str):
     job_id=uuid.uuid4().hex[:12]
     with LOCK: JOBS[job_id]={"id":job_id,"status":"queued","created":__import__("time").time(),"source_path":str(source)}
-    threading.Thread(target=worker,args=(job_id,source,chat_path,ratio),daemon=True).start()
+    threading.Thread(target=worker,args=(job_id,source,chat_path,ratio,style),daemon=True).start()
     return {"job_id":job_id,"status":"queued","poll":f"/jobs/{job_id}"}
 
 @app.get("/health")
@@ -180,8 +191,9 @@ def health():
     return {"ok":True,"service":"BATATES","features":{"upload":True,"direct_media_url":True,"public_watch_page_resolution":True,"obs_rtmp_ingest":True,"editable_clip_export":True,"semantic_vision_configurable":True,"twitch_chat":True,"youtube_chat":bool(os.getenv("BATATES_YOUTUBE_API_KEY")),"optional_whisper":bool(os.getenv("BATATES_WHISPER_MODEL")),"chunked_live_capture":True}}
 
 @app.post("/jobs/upload")
-async def upload_video(video: UploadFile=File(...), chat: Optional[UploadFile]=File(None), ratio: str=Form("9:16")):
+async def upload_video(video: UploadFile=File(...), chat: Optional[UploadFile]=File(None), ratio: str=Form("9:16"), style: str=Form("professional")):
     if ratio not in ("9:16","16:9"): raise HTTPException(400,"ratio must be 9:16 or 16:9")
+    if style not in ("funny","gaming","professional"): raise HTTPException(400,"style must be funny, gaming or professional")
     job_id=uuid.uuid4().hex[:12]; jobdir=DATA/job_id; jobdir.mkdir(parents=True)
     suffix=Path(video.filename or "upload.mp4").suffix.lower()
     if suffix not in (".mp4",".mov",".mkv",".webm",".m4v"): raise HTTPException(400,"Unsupported video format")
