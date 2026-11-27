@@ -7,4 +7,5 @@ COPY app ./app
 ENV BATATES_DATA_DIR=/data
 RUN mkdir -p /data
 EXPOSE 8080
+# RTMP is provided by the companion MediaMTX service in docker-compose.obs.yml
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
