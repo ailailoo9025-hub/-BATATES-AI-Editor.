@@ -354,4 +354,113 @@ class _EditorHomeState extends State<EditorHome> {
   );
 
   Widget _chip(String label) => Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: panel2, borderRadius: BorderRadius.circular(20)), child: Text(label, style: const TextStyle(fontSize: 10, color: cyan)));
+
+  Future<void> importChatFile() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['json']);
+    if (result == null || result.files.single.path == null) return;
+    if (!mounted) return;
+    setState(() {
+      chatFile = File(result.files.single.path!);
+      backendStatus = 'Chat file attached: ${result.files.single.name}';
+    });
+  }
+
+  Future<void> sendToBackend({bool stream = false}) async {
+    if (busy) return;
+    final base = apiBase;
+    if (!base.startsWith('http://') && !base.startsWith('https://')) {
+      setState(() => backendStatus = 'Enter a valid backend URL first.');
+      return;
+    }
+    if (stream && streamController.text.trim().isEmpty) {
+      setState(() => backendStatus = 'Paste a supported direct stream media URL first.');
+      return;
+    }
+    if (!stream && clips.isEmpty) {
+      setState(() => backendStatus = 'Import a video first.');
+      return;
+    }
+    setState(() {
+      busy = true;
+      activeStream = stream;
+      backendStatus = stream ? 'Sending stream URL…' : 'Uploading video for AI analysis…';
+    });
+    try {
+      late http.Response response;
+      if (stream) {
+        response = await http.post(
+          Uri.parse('$base/jobs/stream'),
+          body: {
+            'url': streamController.text.trim(),
+            'ratio': ratio,
+            'platform': chatPlatform,
+            'chat_stream_id': chatStreamController.text.trim(),
+            'max_seconds': '3600',
+          },
+        ).timeout(const Duration(seconds: 60));
+      } else {
+        final request = http.MultipartRequest('POST', Uri.parse('$base/jobs/upload'))
+          ..fields['ratio'] = ratio
+          ..files.add(await http.MultipartFile.fromPath('video', clips[active].path));
+        if (chatFile != null) {
+          request.files.add(await http.MultipartFile.fromPath('chat', chatFile!.path));
+        }
+        final streamed = await request.send().timeout(const Duration(minutes: 15));
+        response = await http.Response.fromStream(streamed);
+      }
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw Exception(response.body);
+      }
+      final job = jsonDecode(response.body) as Map<String, dynamic>;
+      final id = job['job_id'] as String;
+      if (mounted) {
+        setState(() {
+          activeJobId = id;
+          backendStatus = 'BATATES is analyzing job $id…';
+        });
+      }
+      for (var attempt = 0; attempt < 1200; attempt++) {
+        await Future.delayed(const Duration(seconds: 3));
+        final check = await http.get(Uri.parse('$base/jobs/$id')).timeout(const Duration(seconds: 30));
+        if (check.statusCode != 200) throw Exception('Could not read job status: ${check.body}');
+        final data = jsonDecode(check.body) as Map<String, dynamic>;
+        final state = data['status']?.toString() ?? 'unknown';
+        if (mounted) {
+          setState(() => backendStatus = 'AI job $id: $state • clips: ${data['clips_ready'] ?? 0}');
+        }
+        if (state == 'failed') throw Exception(data['error'] ?? 'Processing failed');
+        if (state == 'complete') {
+          final fileResponse = await http.get(Uri.parse('$base/jobs/$id/download')).timeout(const Duration(minutes: 15));
+          if (fileResponse.statusCode != 200) throw Exception('Output download failed');
+          final dir = await getApplicationDocumentsDirectory();
+          final output = File('${dir.path}/BATATES_${DateTime.now().millisecondsSinceEpoch}.mp4');
+          await output.writeAsBytes(fileResponse.bodyBytes);
+          await SharePlus.instance.share(ShareParams(
+            files: [XFile(output.path)],
+            text: 'Created with BATATES AI Editor',
+          ));
+          if (mounted) {
+            setState(() {
+              backendStatus = 'Finished! Your montage is ready to share.';
+              activeStream = false;
+              activeJobId = null;
+            });
+          }
+          return;
+        }
+      }
+      throw Exception('Processing timed out. Check the backend job status.');
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          backendStatus = 'Backend error: $e';
+          activeStream = false;
+          activeJobId = null;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
 }
