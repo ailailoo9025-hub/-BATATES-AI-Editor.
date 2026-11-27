@@ -5,7 +5,10 @@
 - Optional semantic frame analysis through an OpenAI-compatible vision API. The server samples up to 12 frames and sends them to the configured provider; no frames leave the server unless the operator sets the vision key/model.
 - Audio energy and scene-change signals remain additional ranking signals, not substitutes for semantic understanding.
 - Optional timestamped chat JSON for uploaded recordings.
-- Live capture of a **direct authorized media URL** in 60-second chunks. Each chunk is analyzed and highlight segments are prepared as capture proceeds; the final montage is assembled when capture stops or reaches its configured limit.
+- Live capture of direct authorized media URLs and public Twitch/YouTube watch-page URLs (resolved with yt-dlp) in 60-second chunks.
+- OBS RTMP ingest through the companion MediaMTX service (`docker-compose.obs.yml`).
+- Timestamp-aligned chat reaction weighting and individual live clip downloads.
+- Editable source ranges through `POST /jobs/{job_id}/edit`; local app timeline can assemble multiple selected ranges. Each chunk is analyzed and highlight segments are prepared as capture proceeds; the final montage is assembled when capture stops or reaches its configured limit.
 - Twitch IRC and YouTube Live Chat collectors, when their credentials/API access are configured.
 
 ## Run locally
@@ -31,6 +34,15 @@ Chat JSON is an array of timestamped messages, for example:
 [{"timestamp":42.1,"text":"LOL"}]
 ```
 Poll the returned `poll` path; download from `/jobs/{id}/download`.
+
+## Live capture from Twitch/YouTube pages or direct media
+Paste a public Twitch channel/live URL or YouTube live/watch URL into `/jobs/stream`. BATATES infers the platform and video/channel identifier for chat collection where possible, resolves the public media URL with yt-dlp, then analyzes it in chunks. Private/login/DRM streams are not supported.
+
+## OBS RTMP ingest
+See the root `OBS_SETUP.md` and run `docker compose -f docker-compose.obs.yml up --build`. The app calls `/jobs/obs` with the stream key while OBS pushes to MediaMTX.
+
+## Editable clips
+`GET /jobs/{job_id}/clips` returns separate rendered clips as soon as chunks are processed. `POST /jobs/{job_id}/edit` accepts `{"ratio":"9:16","clips":[{"start":12.0,"end":25.0}]}` for re-rendering selected ranges from an uploaded source.
 
 ## Live direct-media capture
 ```sh
