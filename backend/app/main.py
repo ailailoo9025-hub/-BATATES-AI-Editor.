@@ -38,9 +38,7 @@ def audio_windows(path: Path, duration: float, window=5.0):
     # RMS energy per window; used as one signal, never as the only highlight criterion.
     values=[]
     for start in np.arange(0, duration, window):
-        out = run(["ffmpeg","-v","error","-ss",str(float(start)),"-t",str(min(window,duration-start)),"-i",str(path),"-vn","-ac","1","-ar","8000","-f","s16le","-"], timeout=120)
-        a=np.frombuffer(out.encode() if isinstance(out,str) else out, dtype=np.int16) if False else None
-        # ffmpeg stdout is binary in the helper below; fallback to astats is simpler and portable.
+        # Read mean loudness from FFmpeg volumedetect; this is one ranking signal only.
         log=subprocess.run(["ffmpeg","-hide_banner","-nostats","-ss",str(float(start)),"-t",str(min(window,duration-start)),"-i",str(path),"-vn","-af","volumedetect","-f","null","-"],capture_output=True,text=True,timeout=120)
         m=re.search(r"mean_volume:\s*(-?[0-9.]+)\s*dB",log.stderr)
         db=float(m.group(1)) if m else -60.0
