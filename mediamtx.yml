@@ -1,0 +1,11 @@
+# BATATES MediaMTX ingest configuration
+logLevel: info
+rtmp: yes
+rtmpAddress: :1935
+hls: yes
+hlsAddress: :8888
+webrtc: no
+srt: no
+paths:
+  all_others:
+    source: publisher
