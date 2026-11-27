@@ -1,0 +1,24 @@
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1.11.3
+    restart: unless-stopped
+    ports:
+      - "1935:1935"
+      - "8888:8888"
+    networks: [batates]
+  api:
+    build: ./backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      BATATES_DATA_DIR: /data
+      BATATES_MEDIAMTX_HOST: mediamtx
+    volumes:
+      - batates-data:/data
+    depends_on: [mediamtx]
+    networks: [batates]
+networks:
+  batates:
+volumes:
+  batates-data:
