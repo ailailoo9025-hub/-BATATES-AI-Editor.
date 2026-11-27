@@ -52,7 +52,7 @@ class _EditorHomeState extends State<EditorHome> {
   final List<Map<String, double>> highlights = [];
   String status = 'Import a video to begin';
   String ratio = '9:16';
-  final serverController = TextEditingController();
+  final serverController = TextEditingController(text: 'https://batates-ai-editor.onrender.com');
   final streamController = TextEditingController();
   final chatStreamController = TextEditingController();
   final obsKeyController = TextEditingController();
@@ -229,9 +229,9 @@ class _EditorHomeState extends State<EditorHome> {
         Text('EDITOR  •  STUDIO', style: TextStyle(fontSize: 10, color: muted, letterSpacing: 2)),
       ]),
       const Spacer(),
-      const Icon(Icons.cloud_off_rounded, color: cyan, size: 17),
+      const Icon(Icons.cloud_done_rounded, color: cyan, size: 17),
       const SizedBox(width: 6),
-      const Text('LOCAL EDITING', style: TextStyle(color: muted, fontSize: 10, letterSpacing: 1)),
+      const Text('AI CLOUD + LOCAL EDITOR', style: TextStyle(color: muted, fontSize: 10, letterSpacing: 1)),
     ]),
   );
 
@@ -276,7 +276,7 @@ class _EditorHomeState extends State<EditorHome> {
         label: const Text('ارفع فيديو وخلي BATATES يضبطه', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
       )),
       const SizedBox(height: 8),
-      const Text('ارفع الفيديو أو أرسل رابط بث مباشر مدعوم — المعالجة الذكية تتم عبر خادم BATATES.', style: TextStyle(color: muted, fontSize: 11)),
+      const Text('ارفع فيديو مسجّل، وسيحلله BATATES ويجهّز لك أفضل المقاطع. المعالجة تتم عبر خادم BATATES.', style: TextStyle(color: muted, fontSize: 11)),
       const SizedBox(height: 12),
       TextField(controller: serverController, decoration: const InputDecoration(labelText: 'BATATES backend URL', hintText: 'https://your-server.example', prefixIcon: Icon(Icons.cloud_outlined))),
       const SizedBox(height: 8),
@@ -290,33 +290,9 @@ class _EditorHomeState extends State<EditorHome> {
         icon: const Icon(Icons.chat_bubble_outline),
         label: Text(chatFile == null ? 'إرفاق شات بصيغة JSON (اختياري)' : 'تم إرفاق ملف الشات'),
       ),
-      DropdownButtonFormField<String>(
-        value: chatPlatform.isEmpty ? null : chatPlatform,
-        decoration: const InputDecoration(labelText: 'منصة الشات المباشر (اختياري)'),
-        items: const [DropdownMenuItem(value: 'twitch', child: Text('Twitch')), DropdownMenuItem(value: 'youtube', child: Text('YouTube'))],
-        onChanged: (value) => setState(() => chatPlatform = value ?? ''),
-      ),
-      TextField(controller: chatStreamController, decoration: const InputDecoration(labelText: 'اسم قناة Twitch أو معرّف فيديو YouTube')),
-      TextField(controller: streamController, decoration: const InputDecoration(labelText: 'رابط صفحة Twitch أو YouTube أو رابط بث مباشر', prefixIcon: Icon(Icons.live_tv))),
-      SizedBox(width: double.infinity, child: OutlinedButton.icon(
-        onPressed: busy ? null : () => sendToBackend(stream: true),
-        icon: const Icon(Icons.rss_feed),
-        label: const Text('حلّل رابط البث المباشر'),
-      )),
-      const Divider(height: 24),
-      const Text('OBS LIVE INGEST', style: TextStyle(color: cyan, fontSize: 11, fontWeight: FontWeight.bold)),
-      TextField(controller: obsKeyController, decoration: const InputDecoration(labelText: 'مفتاح بث OBS الخاص')),
-      const Text('OBS Server: rtmp://YOUR_SERVER_HOST:1935/live  •  Stream key: نفس المفتاح أعلاه', style: TextStyle(color: muted, fontSize: 10)),
-      SizedBox(width: double.infinity, child: OutlinedButton.icon(
-        onPressed: busy ? null : () => sendToBackend(stream: true, obs: true),
-        icon: const Icon(Icons.videocam),
-        label: const Text('ابدأ استقبال بث OBS'),
-      )),
-      if (activeStream && activeJobId != null)
-        OutlinedButton.icon(onPressed: stopLiveCapture, icon: const Icon(Icons.stop_circle_outlined), label: const Text('إيقاف البث وتجهيز المقاطع')),
+      const Text('وضع الفيديوهات المسجّلة فقط مفعّل حاليًا. ميزات البث وOBS مؤجلة.', style: TextStyle(color: muted, fontSize: 10)),
       Text(backendStatus, style: const TextStyle(color: cyan, fontSize: 11)),
-      const SizedBox(height: 8),
-      const Text('ملاحظة: رابط الفيديو يجب أن يكون رابط وسائط مباشرًا مسموحًا. الشات المباشر يعتمد على إعداد مفاتيح API للخادم وصلاحيات المنصة.', style: TextStyle(color: muted, fontSize: 10)),
+
 
       const SizedBox(height: 10),
       SizedBox(width: double.infinity, child: OutlinedButton.icon(
