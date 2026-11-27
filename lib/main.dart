@@ -339,8 +339,6 @@ class _EditorHomeState extends State<EditorHome> {
 
   Widget _chip(String label) => Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6), decoration: BoxDecoration(color: panel2, borderRadius: BorderRadius.circular(20)), child: Text(label, style: const TextStyle(fontSize: 10, color: cyan)));
 }
-), '');
-
   Future<void> importChatFile() async {
     final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['json']);
     if (result == null || result.files.single.path == null) return;
