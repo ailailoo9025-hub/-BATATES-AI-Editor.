@@ -21,10 +21,16 @@ def resolve_media_url(value: str) -> str:
     host=(u.hostname or "").lower()
     if not (host.endswith("twitch.tv") or host.endswith("youtube.com") or host=="youtu.be"):
         return value
-    p=subprocess.run(["yt-dlp","--no-warnings","--no-playlist","-f","best","-g",value],
-                     capture_output=True,text=True,timeout=35)
+    p=subprocess.run(
+        ["yt-dlp","--no-warnings","--no-playlist",
+         "-f","best[acodec!=none][vcodec!=none]/best",
+         "-g",value],
+        capture_output=True,text=True,timeout=45
+    )
     if p.returncode or not p.stdout.strip():
         raise RuntimeError("Could not resolve this public live page. Confirm it is live and publicly accessible; authenticated/DRM streams are not supported. "+(p.stderr or "")[-500:])
-    # yt-dlp can emit audio and video URLs on separate lines; FFmpeg accepts the first
-    # best combined format where available.
-    return p.stdout.strip().splitlines()[0].strip()
+    urls=[line.strip() for line in p.stdout.splitlines() if line.strip()]
+    # Never silently discard a separate audio/video URL: FFmpeg needs both inputs.
+    if len(urls) != 1:
+        raise RuntimeError("This live source returned separate media tracks. Try a public stream format that provides a combined audio/video stream.")
+    return urls[0]
