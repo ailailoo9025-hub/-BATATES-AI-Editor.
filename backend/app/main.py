@@ -204,7 +204,7 @@ async def upload_video(video: UploadFile=File(...), chat: Optional[UploadFile]=F
         chat_path=jobdir/"chat.json"
         chat_path.write_bytes(await chat.read())
     with LOCK: JOBS[job_id]={"id":job_id,"status":"queued","created":__import__("time").time()}
-    threading.Thread(target=worker,args=(job_id,source,chat_path,ratio),daemon=True).start()
+    threading.Thread(target=worker,args=(job_id,source,chat_path,ratio,style),daemon=True).start()
     return {"job_id":job_id,"status":"queued","poll":f"/jobs/{job_id}"}
 
 @app.post("/jobs/stream")
