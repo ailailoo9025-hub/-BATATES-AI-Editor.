@@ -1,40 +1,50 @@
 # BATATES Processing API (experimental)
 
-This service adds real server-side processing for BATATES:
-- Uploaded video analysis and multi-highlight montage rendering.
-- Optional timestamped chat JSON, aligned to media time.
-- Audio-energy and visual scene-change signals.
-- Optional Faster-Whisper transcript signal.
-- Authorized direct media URL capture (bounded to 10 minutes).
+## What is implemented
+- Video upload and multi-highlight montage rendering.
+- Optional semantic frame analysis through an OpenAI-compatible vision API. The server samples up to 12 frames and sends them to the configured provider; no frames leave the server unless the operator sets the vision key/model.
+- Audio energy and scene-change signals remain additional ranking signals, not substitutes for semantic understanding.
+- Optional timestamped chat JSON for uploaded recordings.
+- Live capture of a **direct authorized media URL** in 60-second chunks. Each chunk is analyzed and highlight segments are prepared as capture proceeds; the final montage is assembled when capture stops or reaches its configured limit.
+- Twitch IRC and YouTube Live Chat collectors, when their credentials/API access are configured.
 
 ## Run locally
-Requires Docker and a machine with FFmpeg. From this folder:
+Requires Docker and FFmpeg:
 ```sh
 docker build -t batates-api .
-docker run --rm -p 8080:8080 -v batates-data:/data batates-api
+docker run --rm -p 8080:8080 -v batates-data:/data \
+  -e BATATES_VISION_API_KEY=... \
+  -e BATATES_VISION_MODEL=... \
+  -e BATATES_TWITCH_OAUTH_TOKEN=... \
+  -e BATATES_TWITCH_NICK=... \
+  -e BATATES_YOUTUBE_API_KEY=... \
+  batates-api
 ```
-Health: `http://localhost:8080/health`.
+Set `BATATES_VISION_BASE_URL` for a compatible provider endpoint other than the default OpenAI API. Vision model selection, provider charges, rate limits and data handling are controlled by the server operator.
 
-Upload:
+## Upload a video
 ```sh
 curl -F "video=@recording.mp4" -F "ratio=9:16" -F "chat=@chat.json" http://localhost:8080/jobs/upload
 ```
-Chat JSON is an array of objects with numeric `timestamp` in seconds and `message`, e.g.
-`[{"timestamp":42.1,"message":"LOL"}]`.
+Chat JSON is an array of timestamped messages, for example:
+```json
+[{"timestamp":42.1,"text":"LOL"}]
+```
 Poll the returned `poll` path; download from `/jobs/{id}/download`.
 
-Direct stream:
+## Live direct-media capture
 ```sh
-curl -F "url=https://example.org/authorized/live.m3u8" -F "ratio=9:16" http://localhost:8080/jobs/stream
+curl -F "url=https://example.org/authorized/live.m3u8" \
+  -F "ratio=9:16" -F "max_seconds=3600" \
+  -F "platform=twitch" -F "chat_stream_id=channelname" \
+  http://localhost:8080/jobs/stream
 ```
-This is for direct media URLs the user is authorized to access. It does not extract media from platform watch pages, defeat DRM, bypass login, or read platform chat. Provider-specific chat adapters and continuous live rolling capture are not included yet.
+For YouTube use `platform=youtube` and the live video ID as `chat_stream_id`. Omit platform/chat fields to disable chat collection. Stop early with `POST /jobs/{job_id}/stop`.
+
+**Important:** the media URL must be a direct stream URL the user is authorized to access. A YouTube/Twitch watch-page URL is not a direct media URL; this service does not bypass login, DRM, access controls, or platform restrictions. Chat collection uses official/authorized interfaces and can fail when the stream is not live, chat is disabled, credentials are missing, or API quotas/permissions are insufficient.
 
 ## Optional speech transcription
-Install `faster-whisper` in the image and set `BATATES_WHISPER_MODEL=small` (or another supported model). This increases image size and CPU/GPU requirements. Without it, the pipeline still analyzes audio energy, visual scene changes, and supplied chat.
+Install `faster-whisper` in the image and set `BATATES_WHISPER_MODEL=small` (or another supported model). This increases image size and CPU/GPU requirements.
 
-## Current limitations
-- Scene-change analysis is not object/action understanding; no general semantic vision model is bundled.
-- Chat is accepted as a timestamped JSON sidecar; no Twitch/YouTube/Kick provider connector is bundled.
-- Stream capture is a single bounded 10-minute segment, not an always-on live monitor.
-- One worker thread per job; not production queueing or multi-user security. Add authentication, quotas, persistent job storage, SSRF protection, encrypted secrets, cleanup policy, and a queue before public deployment.
-- This API is an experimental processing backend and must be deployed to a reachable HTTPS host before the Android app can use it.
+## Deployment and security limitations
+This is an experimental single-process backend. Before public deployment, add user authentication, HTTPS, quotas, persistent job state, queue workers, SSRF/DNS-rebinding protection, encrypted secret storage, retention/cleanup policies, and monitoring. The Android app needs the deployed HTTPS base URL; localhost defaults are for development only.
