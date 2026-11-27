@@ -60,6 +60,7 @@ class _EditorHomeState extends State<EditorHome> {
   String chatPlatform = '';
   String? activeJobId;
   bool activeStream = false;
+  bool obsMode = false;
   String backendStatus = 'Backend not connected';
 
   String get apiBase => serverController.text.trim().replaceAll(RegExp(r'/+$'), '');
@@ -262,6 +263,35 @@ class _EditorHomeState extends State<EditorHome> {
     return Padding(
     padding: const EdgeInsets.all(18),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('WORKSPACE', style: TextStyle(color: muted, fontSize: 10, letterSpacing: 1.5, fontWeight: FontWeight.bold)),
+      const SizedBox(height: 8),
+      Card(color: panel, child: Padding(padding: const EdgeInsets.all(14), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [const Icon(Icons.sensors_rounded, color: cyan), const SizedBox(width: 8), const Text('LIVE CLIP CAPTURE', style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 1))]),
+        const SizedBox(height: 6),
+        const Text('استقبل بثًا عامًا أو بث OBS، ثم اجمع اللقطات المرشحة في كليبات.', style: TextStyle(color: muted, fontSize: 11)),
+        const SizedBox(height: 12),
+        SegmentedButton<bool>(segments: const [
+          ButtonSegment(value: false, label: Text('رابط بث')),
+          ButtonSegment(value: true, label: Text('OBS')),
+        ], selected: {obsMode}, onSelectionChanged: busy ? null : (v) => setState(() => obsMode = v.first)),
+        const SizedBox(height: 10),
+        if (!obsMode) TextField(controller: streamController, enabled: !busy, decoration: const InputDecoration(labelText: 'رابط البث العام', hintText: 'https://…', prefixIcon: Icon(Icons.link))),
+        if (obsMode) TextField(controller: obsKeyController, enabled: !busy, decoration: const InputDecoration(labelText: 'مفتاح بث BATATES', hintText: '8-80 characters', prefixIcon: Icon(Icons.key))),
+        const SizedBox(height: 10),
+        DropdownButtonFormField<String>(value: chatPlatform.isEmpty ? null : chatPlatform, decoration: const InputDecoration(labelText: 'تحليل الشات (اختياري)'), items: const [
+          DropdownMenuItem(value: '', child: Text('بدون شات')),
+          DropdownMenuItem(value: 'twitch', child: Text('Twitch')),
+          DropdownMenuItem(value: 'youtube', child: Text('YouTube')),
+        ], onChanged: busy ? null : (v) => setState(() => chatPlatform = v ?? '')),
+        if (chatPlatform.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 10), child: TextField(controller: chatStreamController, enabled: !busy, decoration: const InputDecoration(labelText: 'معرّف البث للشات', prefixIcon: Icon(Icons.tag)))),
+        const SizedBox(height: 10),
+        SizedBox(width: double.infinity, child: FilledButton.icon(onPressed: busy ? null : () => sendToBackend(stream: !obsMode, obs: obsMode), icon: const Icon(Icons.play_arrow_rounded), label: const Text('ابدأ استقبال البث وتحليل اللقطات'))),
+        if (activeStream) Padding(padding: const EdgeInsets.only(top: 8), child: SizedBox(width: double.infinity, child: OutlinedButton.icon(onPressed: stopLiveCapture, icon: const Icon(Icons.stop_circle_outlined), label: const Text('إيقاف البث وإنهاء الكليبات')))),
+        const SizedBox(height: 8),
+        const Text('تنبيه: روابط صفحات البث قد لا تعمل دائمًا. خيار OBS يحتاج MediaMTX منشورًا ومربوطًا بالخادم؛ Render الحالي لا يحتوي عليه بعد.', style: TextStyle(color: muted, fontSize: 10)),
+        Text(backendStatus, style: const TextStyle(color: cyan, fontSize: 11)),
+      ]))),
+      const SizedBox(height: 14),
       Wrap(spacing: 10, runSpacing: 10, crossAxisAlignment: WrapCrossAlignment.center, children: [
         const Text('AI QUICK EDIT', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
         _chip('Auto edit'),
@@ -290,7 +320,7 @@ class _EditorHomeState extends State<EditorHome> {
         icon: const Icon(Icons.chat_bubble_outline),
         label: Text(chatFile == null ? 'إرفاق شات بصيغة JSON (اختياري)' : 'تم إرفاق ملف الشات'),
       ),
-      const Text('وضع الفيديوهات المسجّلة فقط مفعّل حاليًا. ميزات البث وOBS مؤجلة.', style: TextStyle(color: muted, fontSize: 10)),
+      const Text('الفيديو المسجّل: تحليل المرشحات، مراجعتها، ثم تصديرها من جهازك.', style: TextStyle(color: muted, fontSize: 10)),
       Text(backendStatus, style: const TextStyle(color: cyan, fontSize: 11)),
 
 
@@ -468,14 +498,35 @@ class _EditorHomeState extends State<EditorHome> {
           setState(() => backendStatus = 'AI job $id: $state • clips: ${data['clips_ready'] ?? 0}');
         }
         if (state == 'failed') throw Exception(data['error'] ?? 'Processing failed');
+        if (state == 'clips_available' && mounted) {
+          setState(() => backendStatus = 'تم اكتشاف ${data['clips_ready'] ?? 0} كليب حتى الآن… أوقف البث لإنهاء التصدير.');
+        }
         if (state == 'complete') {
           final fileResponse = await http.get(Uri.parse('$base/jobs/$id/download')).timeout(const Duration(minutes: 15));
           if (fileResponse.statusCode != 200) throw Exception('Output download failed');
           final dir = await getApplicationDocumentsDirectory();
           final output = File('${dir.path}/BATATES_${DateTime.now().millisecondsSinceEpoch}.mp4');
           await output.writeAsBytes(fileResponse.bodyBytes);
+          final clipResponse = await http.get(Uri.parse('$base/jobs/$id/clips')).timeout(const Duration(seconds: 30));
+          final readyClips = <XFile>[];
+          if (clipResponse.statusCode == 200) {
+            final clipData = jsonDecode(clipResponse.body) as Map<String, dynamic>;
+            final items = (clipData['clips'] as List<dynamic>? ?? []).take(10);
+            var clipNumber = 0;
+            for (final item in items) {
+              final relative = (item as Map<String, dynamic>)['download']?.toString();
+              if (relative == null) continue;
+              final clipFile = await http.get(Uri.parse('$base$relative')).timeout(const Duration(minutes: 5));
+              if (clipFile.statusCode != 200) continue;
+              clipNumber++;
+              final clipPath = '${dir.path}/BATATES_${DateTime.now().millisecondsSinceEpoch}_clip_$clipNumber.mp4';
+              final saved = File(clipPath);
+              await saved.writeAsBytes(clipFile.bodyBytes);
+              readyClips.add(XFile(saved.path));
+            }
+          }
           await SharePlus.instance.share(ShareParams(
-            files: [XFile(output.path)],
+            files: readyClips.isEmpty ? [XFile(output.path)] : readyClips,
             text: 'Created with BATATES AI Editor',
           ));
           if (mounted) {
