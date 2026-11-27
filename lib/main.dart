@@ -42,6 +42,7 @@ class EditorHome extends StatefulWidget {
 
 class _EditorHomeState extends State<EditorHome> {
   final List<File> clips = [];
+  File? chatFile;
   VideoPlayerController? player;
   int active = 0;
   double start = 0;
@@ -247,6 +248,11 @@ class _EditorHomeState extends State<EditorHome> {
         icon: const Icon(Icons.auto_awesome),
         label: const Text('حلّل الفيديو واصنع المقاطع تلقائيًا'),
       )),
+      OutlinedButton.icon(
+        onPressed: busy ? null : importChatFile,
+        icon: const Icon(Icons.chat_bubble_outline),
+        label: Text(chatFile == null ? 'إرفاق شات بصيغة JSON (اختياري)' : 'تم إرفاق ملف الشات'),
+      ),
       TextField(controller: streamController, decoration: const InputDecoration(labelText: 'رابط بث مباشر (رابط وسائط مباشر مدعوم)', prefixIcon: Icon(Icons.live_tv))),
       SizedBox(width: double.infinity, child: OutlinedButton.icon(
         onPressed: busy ? null : () => sendToBackend(stream: true),
@@ -324,6 +330,12 @@ class _EditorHomeState extends State<EditorHome> {
 }
 ), '');
 
+  Future<void> importChatFile() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['json']);
+    if (result == null || result.files.single.path == null) return;
+    setState(() { chatFile = File(result.files.single.path!); backendStatus = 'Chat file attached: ${result.files.single.name}'; });
+  }
+
   Future<void> sendToBackend({bool stream = false}) async {
     if (busy) return;
     final base = apiBase;
@@ -343,6 +355,7 @@ class _EditorHomeState extends State<EditorHome> {
         final request = http.MultipartRequest('POST', uri)
           ..fields['ratio'] = ratio
           ..files.add(await http.MultipartFile.fromPath('video', clips[active].path));
+        if (chatFile != null) request.files.add(await http.MultipartFile.fromPath('chat', chatFile!.path));
         final streamed = await request.send().timeout(const Duration(minutes: 15));
         response = await http.Response.fromStream(streamed);
       }
