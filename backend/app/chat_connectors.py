@@ -27,10 +27,14 @@ class ChatCollector:
     def _twitch(self, channel):
         try:
             import websocket
+            token=os.getenv("BATATES_TWITCH_OAUTH_TOKEN","").strip()
+            nick=os.getenv("BATATES_TWITCH_NICK","").strip()
+            if not token or not nick:
+                raise RuntimeError("Set BATATES_TWITCH_OAUTH_TOKEN and BATATES_TWITCH_NICK to read Twitch chat.")
             ws=websocket.create_connection("wss://irc-ws.chat.twitch.tv:443",timeout=20)
-            ws.send("CAP REQ :twitch.tv/tags twitch.tv/commands\r\n")
-            ws.send("PASS SCHMOOPIIE\r\n")
-            ws.send("NICK justinfan"+str(int(time.time())%99999)+"\r\n")
+            ws.send("CAP REQ :twitch.tv/tags twitch.tv/commands\\r\\n")
+            ws.send("PASS "+(token if token.startswith("oauth:") else "oauth:"+token)+"\\r\\n")
+            ws.send("NICK "+nick+"\\r\\n")
             ws.send("JOIN #"+channel.lstrip("#").lower()+"\r\n")
             ws.settimeout(2)
             while not self.stop_event.is_set():
