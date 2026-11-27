@@ -183,7 +183,7 @@ def worker(job_id, source, chat_path, ratio, style="professional"):
 def new_job(source: Path, chat_path: Optional[Path], ratio: str):
     job_id=uuid.uuid4().hex[:12]
     with LOCK: JOBS[job_id]={"id":job_id,"status":"queued","created":__import__("time").time(),"source_path":str(source)}
-    threading.Thread(target=worker,args=(job_id,source,chat_path,ratio,style),daemon=True).start()
+    threading.Thread(target=worker,args=(job_id,source,chat_path,ratio,"professional"),daemon=True).start()
     return {"job_id":job_id,"status":"queued","poll":f"/jobs/{job_id}"}
 
 @app.get("/health")
