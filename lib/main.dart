@@ -52,7 +52,7 @@ class _EditorHomeState extends State<EditorHome> {
   final List<Map<String, double>> highlights = [];
   String status = 'Import a video to begin';
   String ratio = '9:16';
-  final serverController = TextEditingController(text: 'http://10.0.2.2:8080');
+  final serverController = TextEditingController();
   final streamController = TextEditingController();
   final chatStreamController = TextEditingController();
   String chatPlatform = '';
@@ -238,7 +238,7 @@ class _EditorHomeState extends State<EditorHome> {
       const SizedBox(height: 12),
       SizedBox(width: double.infinity, child: FilledButton.icon(
         style: FilledButton.styleFrom(backgroundColor: purple, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 18)),
-        onPressed: busy || scanning ? null : (clips.isEmpty ? importVideos : () => export(auto: true)),
+        onPressed: busy || scanning ? null : (clips.isEmpty ? importVideos : () => sendToBackend()),
         icon: const Icon(Icons.auto_awesome_rounded, size: 22),
         label: const Text('ارفع فيديو وخلي BATATES يضبطه', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
       )),
