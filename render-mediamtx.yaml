@@ -1,0 +1,10 @@
+services:
+  - type: pserv
+    name: batates-mediamtx
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile.mediamtx
+    dockerContext: .
+    envVars:
+      - key: MTX_RTSP
+        value: "no"
